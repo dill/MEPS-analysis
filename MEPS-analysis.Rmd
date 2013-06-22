@@ -1,0 +1,759 @@
+`r opts_chunk$set(fig.path='MEPS-analysis-figs/', cache.path='MEPS-cache/')`
+# Supplemental material for: Environmental factors determining the distribution and abundance of a diving marine bird: conservation implications for the common loon *Gavia immer*
+# Analysis of common loon data
+
+This document is a record of modelling for the common loon data from the URI survey of the OSAMP area off the coast of Rhode Island. It includes minimal interpretation of results, which can be found in the accompanying paper.
+
+This document has been created using \texttt{knitr} (Yihui 2013). The file \texttt{MEPS-analysis.Rmd} includes all the code necessary to run the models described.
+
+## Preamble
+
+Load the data and `dsm` package (Miller 2012).
+```{r}
+load("loon-data.RData")
+suppressPackageStartupMessages(library(dsm))
+```
+
+## Exploratory data analysis
+
+We begin by plotting the raw data: the observed distances, raw observations both unaggregated and split according to survey season.
+
+First plotting the histogram of observed distances:
+```{r dist-hist, fig.cap="Histogram of observed distances to flocks of common loons"}
+hist(obs.loons$distance,breaks=sort(unique(c(obs.loons$distbegin,obs.loons$distend))), main="", xlab="Distance (m)",axes=FALSE)
+axis(2)
+axis(1,at=c(44,164,433,1000))
+box()
+```
+
+```{r raw-obs, fig.cap="Raw observations of common loons. The size of the circle relates to the size of the observed flock."}
+p <- ggplot(obs.loons)
+p <- p + geom_point(aes(x=x,y=y,size=size),alpha=0.5)
+p <- p + geom_path(aes(x=x,y=y,group=group),data=coast)
+p <- p + p.opts.geo
+p <- p + coord_equal(xlim = xlims, ylim = ylims)
+leg.breaks <- unique(quantile(obs.loons$size))
+leg.breaks <- round(seq(leg.breaks[1],leg.breaks[2],len=5),0)
+leg.breaks <- round(leg.breaks,0)
+p <- p + scale_size(breaks=leg.breaks)
+p <- p + labs(x="km east",y="km north")
+print(p)
+```
+
+```{r raw-obs-facet, fig.cap="Raw observations of common loons aggregated to the survey season. The size of the circle relates to the size of the observed flock."}
+p <- p + facet_wrap(~SeasonYear)
+print(p)
+```
+
+These raw plots clearly show higher observed abundances in the area between Block Island and Long Island Sound.
+
+
+## Detection function analysis
+
+Stage one of the density surface modelling approach is to adjust the counts to account for detectability. We begin by fitting a detection function to the distance data using the `R` package `Distance` (Miller 2013).
+
+Fit a detection function with half-normal, hazard rate and uniform key functions with no covariates and select adjustment terms by AIC. We enforce monotonicity on the resulting models to ensure that probability of detection doesn't increase with distance.
+```{r cache=TRUE}
+hn.df <- ds(obs.loons, truncation=list(right=1000, left=44),monotonicity="strict")
+hr.df <- ds(obs.loons, truncation=list(right=1000, left=44),key="hr",monotonicity="strict")
+hn.herm.df <- ds(obs.loons,adjustment="herm", truncation=list(right=1000, left=44),monotonicity="strict")
+hr.poly.df <- ds(obs.loons,adjustment="poly", truncation=list(right=1000, left=44),key="hr",monotonicity="strict")
+```
+
+We can also see if covariates have an effect (though we cannot then ensure that the resulting functions are monotonic), looking at flock size and observer:
+```{r  cache=TRUE}
+hn.df.size <- ds(obs.loons, formula=~size, adjustment=NULL, truncation=list(right=1000, left=44))
+hr.df.size <- ds(obs.loons, formula=~size, adjustment=NULL, truncation=list(right=1000, left=44),key="hr")
+hn.df.obs <- ds(obs.loons, formula=~as.factor(Observer), adjustment=NULL, truncation=list(right=1000, left=44))
+hr.df.obs <- ds(obs.loons, formula=~as.factor(Observer), adjustment=NULL, truncation=list(right=1000, left=44),key="hr")
+```
+
+Also a model with both covariates included:
+```{r cache=TRUE}
+hn.df.size.obs <- ds(obs.loons, formula=~size+as.factor(Observer), adjustment=NULL, truncation=list(right=1000, left=44))
+hr.df.size.obs <- ds(obs.loons, formula=~size+as.factor(Observer), adjustment=NULL, truncation=list(right=1000, left=44),key="hr")
+```
+
+Below is a table of the results ordered by AIC. Note that in none of the models considered were adjustment terms selected.
+
+```{r cache=TRUE, echo=FALSE, results="asis",fig.keep="none"}
+library(xtable)
+
+get.mod <- function(mod){
+
+  if(mod=="hn.df"){
+    series <- "cos(0)"
+  }else if(mod=="hn.herm.df"){
+    series <- "hermite polynomial(0)"
+  }else if(mod=="hr.df"){
+    series <- "cos(0)"
+  }else if(mod=="hr.poly.df"){
+    series <- "simple polynomial(0)"
+  }else{
+    series <- ""
+  }
+
+  mod <- get(mod)
+  x <- summary(mod)
+  b<-qqplot.ddf(mod$ddf)
+
+  #if(!is.null(x$ds$adjustment$series)){
+  #  series <- paste0(x$ds$adjustment$series,"(",x$ds$adjustment$order,")")
+  #  adj.parn <- length(x$ds$adjustment$parameters)
+  #}else{
+  #  series <- ""
+    adj.parn <- 0
+  #}
+  if(nrow(x$ds$coef$key.scale)>1){
+    covs <- paste0(unique(gsub("as\\.factor\\((\\w+)\\).*","\\1",
+                     rownames(x$ds$coef$key.scale)[-1])),collapse="+")
+  }else{
+    covs <- ""
+  }
+
+  tl <- c(x$ds$key,
+          series,
+          covs,
+          mod$ddf$criterion,
+          nrow(x$ds$coef$key.scale)+as.numeric(x$ds$key=="hr")+adj.parn,
+          round(c(x$ds$average.p,x$ds$average.p.se/x$ds$average.p,
+          b$CvM$p),3), b$ks$p)
+
+  return(tl)
+}
+nm <- c("hn.df","hr.df","hn.herm.df","hr.poly.df","hn.df.size","hr.df.size",
+        "hn.df.obs","hr.df.obs","hn.df.size.obs","hr.df.size.obs")
+
+res<-apply(t(t(nm)),1,get.mod)
+res<-t(res)
+res <- res[order(as.numeric(res[,4])),]
+res[,4] <- round(as.numeric(res[,4]),3)
+res <- cbind(res[,1:4],
+             round(as.numeric(res[,4])-min(as.numeric(res[,4])),3),
+             res[,5:8])
+colnames(res) <- c("Detection function", "Adjustments", "Covariates", "AIC",
+                   "$\\Delta$ AIC", "# pars", "p", "CV(p)", "C-vM p")#, "KS p")
+print(xtable(res),type="html")
+```
+
+We first note that out of the 10 models fitted, the AIC score of the top 5 are within 2 points of each other (column $\Delta$ AIC). Models 4 and 5 are identical, as no adjustments were selected by AIC for either hazard-rate model.
+
+Discarding model 5, the rest of the top 4 models will be used in the spatial models fitted below and compared. We note however that the top model requires 5 parameters to obtain an improvement of less than 1 AIC point over the next ranked model (and less than 2 different from the 4th ranked model).
+
+```{r hr-detfct, fig.cap="Fitted detection functions.",fig.width=12}
+par(mfrow=c(2,3))
+plot(hr.df.size.obs,pl.den=0,main="Hazard-rate (size+obs)")
+plot(hn.df,pl.den=0,main="Half-normal+cos(2)")
+plot(hr.df.obs,pl.den=0,main="Hazard-rate (obs)")
+plot(hr.df.size,pl.den=0,main="Hazard-rate (size)")
+plot(hr.df,pl.den=0,main="Hazard-rate (No covars)")
+```
+
+## Spatial modelling
+
+We now fit a model using the three measures of chlorophyll *a* described in the article. Before proceeding, we give a few comments about modelling strategy.
+
+We can include all spatially-referenced covariates in the model and use the `select=TRUE` option, this allows the smooth terms to be shrunk to zero (flat linear effects), which we can then remove from the model and refit (see Wood 2006 Section 4.1.6 and Wood 2011).
+
+From Winiarski et al (in review), we see that the parameter of the negative binomial is around 0.18. Here we specify a relatively wide range (which we can widen if it appears that the parameter is hitting the bounds) and estimate it along with the other parameters.
+
+All models below show the "final" model with the terms removed commented out. Those wishing to see how model development progressed can uncomment these terms and follow through the term selection process, re-fitting these models.
+
+In terms of model checking, we use the plots provided by `gam.check` (in particular a Q-Q plot). It is likely that neighbouring segments have similar counts, since we would expect that loons cluster near, for example, prey agglomerations. To check that there is not unmodelled correlation in the data, we calculate the correlations between the per-segment residuals at different "lags". This can be achieved using the `dsm.cor` function in the `dsm` package.
+
+First setting the basis sizes for unidimensional and bivariate smooth terms:
+
+```{r}
+k1 <- 10
+k2 <- 18
+```
+
+We then proceed with model fitting.
+
+
+
+
+### DSM -- hazard-rate (observer and group size)
+
+```{r cache=TRUE}
+loon.model.obs.size <- dsm(Nhat~#s(gchl_winter,k=k1)+
+                         s(gchl_long,k=k1)+
+                         #s(fcpi,k=k1)+
+                         #s(roughness,k=k1)+
+                         #s(phimedian,k=k1)+
+                         #distancelandkm+
+                         #s(distancelandkm,k=k1)+
+                         s(depthm,k=k1)+
+                         #s(x,k=k1)+
+                         s(y,k=k1),#+
+                         #s(x,y,k=k2),
+                  hr.df.size.obs, seg, obs.loons,
+                  family=negbin(theta=c(0.1,0.2)), availability=0.7,
+                  #family=negbin(theta=c(0.1,0.12)), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r cache=TRUE}
+summary(loon.model.obs.size)
+```
+
+```{r dsm-check.hr.obs.size, cache=TRUE, fig.cap=""}
+gam.check(loon.model.obs.size)
+```
+
+```{r dsm-autocor.hr.obs.size, cache=TRUE, fig.cap=""}
+dsm.cor(loon.model.obs.size,max.lag=30)
+```
+
+```{r cache=TRUE}
+summary(dsm.var.gam(loon.model.obs.size,pred,pred$cellaream))
+```
+
+
+### DSM -- hazard-rate (observer)
+
+```{r cache=TRUE}
+loon.model.obs <- dsm(Nhat~#s(gchl_winter,k=k1)+
+                         s(gchl_long,k=k1)+
+                         #s(fcpi,k=k1)+
+                         #s(roughness,k=k1)+
+                         #s(phimedian,k=k1)+
+                         #distancelandkm+
+                         #s(distancelandkm,k=k1)+
+                         s(depthm,k=k1)+
+                         #s(x,k=k1)+
+                         s(y,k=k1),#+
+                         #s(x,y,k=k2),
+                  hr.df.obs, seg, obs.loons,
+                  family=negbin(theta=c(0.1,0.2)), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r cache=TRUE}
+summary(loon.model.obs)
+```
+
+```{r dsm-check.hr.obs, cache=TRUE, fig.cap=""}
+gam.check(loon.model.obs)
+```
+
+```{r dsm-autocor.hr.obs, cache=TRUE, fig.cap=""}
+dsm.cor(loon.model.obs,max.lag=30)
+```
+
+```{r cache=TRUE}
+summary(dsm.var.gam(loon.model.obs,pred,pred$cellaream))
+```
+
+
+
+
+
+### DSM -- hazard-rate (group size)
+
+```{r cache=TRUE}
+loon.model.size <- dsm(Nhat~#s(gchl_winter,k=k1)+
+                            s(gchl_long,k=k1)+
+                            #s(fcpi,k=k1)+
+                            #s(roughness,k=k1)+
+                            #s(phimedian,k=k1)+
+                            #distancelandkm+
+                            #s(distancelandkm,k=k1)+
+                            s(depthm,k=k1)+
+                            #s(x,k=k1)+
+                            s(y,k=k1),#+
+                            #s(x,y,k=k2),
+                  hr.df.size, seg, obs.loons,
+                  family=negbin(theta=c(0.1,0.2)), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r cache=TRUE}
+summary(loon.model.size)
+```
+```{r dsm-check.hr.size, cache=TRUE, fig.cap=""}
+gam.check(loon.model.size)
+```
+
+
+```{r dsm-autocor.hr.size, cache=TRUE, fig.cap=""}
+dsm.cor(loon.model.size,max.lag=30)
+```
+
+```{r cache=TRUE}
+summary(dsm.var.gam(loon.model.size,pred,pred$cellaream))
+```
+
+
+
+### DSM -- hazard-rate (no covariates)
+
+```{r cache=TRUE}
+loon.model.hr <- dsm(N~s(gchl_long,k=k1)+
+#                    s(gchl_winter,k=k1)+
+#                    s(fcpi,k=k1)+
+#                    s(roughness,k=k1)+
+#                    s(phimedian,k=k1)+
+#                    s(distancelandkm,k=k1)+
+                    s(depthm,k=k1)+
+#                    s(x,k=k1)+
+                    s(y,k=k1),#+
+#                    s(x,y,k=k2),
+                  hr.df, seg, obs.loons,
+                  family=negbin(theta=c(0.1,0.2)), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r}
+summary(loon.model.hr)
+```
+
+The Q-Q plot for this model looks rather good!
+
+```{r dsm-check.hr, fig.cap=""}
+gam.check(loon.model.hr)
+```
+
+```{r dsm-autocor.hr, cache=TRUE, fig.cap=""}
+dsm.cor(loon.model.hr,max.lag=30)
+```
+
+Predicting the abundance over the OSAMP area and the corresponding confidence interval using the method of Williams et al (2011).
+
+```{r cache=TRUE}
+summary(dsm.var.prop(loon.model.hr,pred,pred$cellaream))
+```
+
+
+
+
+
+
+
+## Comparison of DSMs
+
+We now compare the models fitted above. Below is a table summarising the results from model fitting, as well as predictions over the OSAMP area. Also in the table are the EDFs of the smooth terms in each model (which are all fairly similar).
+
+```{r cache=TRUE, echo=FALSE, results="asis",fig.keep="none"}
+get.mod.gam <- function(mod.name){
+
+  mod <- get(mod.name)
+
+  if(as.character(mod$formula[[2]])=="Nhat"){
+    unc <- summary(dsm.var.gam(mod,pred,pred$cellaream))
+  }else{
+    unc <- summary(dsm.var.prop(mod,pred,pred$cellaream))
+  }
+
+  tl <- c(mod.name,
+          round(summary(mod)$edf,2), # 3 elements!
+          round(unc$pred.est,3),
+          round(unc$cv,3),
+          ifelse(unc$varprop,"Yes","No"), # varprop?
+          round(100*(1-mod$deviance/mod$null.deviance),3),
+          (round(summary(mod)$r.sq,3)))
+
+
+  return(tl)
+}
+nm <- c("loon.model.obs.size","loon.model.obs","loon.model.size","loon.model.hr")
+
+res <- apply(t(t(nm)),1,get.mod.gam)
+res <- t(res)
+res <- res[order(as.numeric(res[,5]),decreasing=TRUE),]
+colnames(res) <- c("Model",paste(c("Geometric mean of chlorophyll","Depth","Northing (y)"),"EDF"),"Abundance estimate","CV","Variance propagation","% deviance explained","adj-$R^2$")
+print(xtable(res),type="html")
+```
+
+### Comparison of smooth terms
+
+We note that all of the models selected the same covariates (`gchl_long`, `depth` and `y`), which is encouraging in the sense that there appears to be stability in covariate selction, invariant to the choice of detection function. The below plot shows that there are minimal differences in the smooths per-covariate. We also see that the confidence bands around the smooths overlap almost all of the time.
+
+```{r fig.width=12, fig.cap="Overlaid model plots of per-covariate smooths with confidence intervals.", echo=FALSE, cache=TRUE}
+
+plot.all.covs <- function(mod.list){
+
+  for(cov in 1:3){
+    plot.res <- c()
+    se.res <- c()
+    ylims <- c(0,0)
+    for(i in 1:length(mod.list)){
+      this.mod <- get(mod.list[i])
+      first <-this.mod$smooth[[cov]]$first.para
+      last <- this.mod$smooth[[cov]]$last.para
+
+      pms <- mgcv:::plot.mgcv.smooth(this.mod$smooth[[cov]],
+                              data=this.mod$data)
+      yvals <- pms$X %*% coefficients(this.mod)[first:last]
+      plot.res <- rbind(plot.res,t(yvals))
+
+      se.res <- rbind(se.res,sqrt(rowSums((pms$X%*%
+                              this.mod$Vp[first:last,first:last,drop=FALSE])*
+                                 pms$X)))
+
+    }
+
+    ylims <- c(min(plot.res-se.res),max(plot.res+se.res))
+    plot(range(pms$x),ylims,type="n",xlab=this.mod$smooth[[cov]]$term,ylab="Response")
+
+    for(i in 1:length(mod.list)){
+      ll <- plot.res[i,]-se.res[i,]
+      ul <- plot.res[i,]+se.res[i,]
+      polygon(c(pms$x,pms$x[length(pms$x):1],pms$x[1]),
+              c(ul,ll[length(ll):1],ul[1]),col = rgb(0.5,0.5,0.5,0.2),border = NA)
+    }
+    for(i in 1:length(mod.list)){
+      lines(pms$x,plot.res[i,])
+    }
+
+
+  }
+}
+par(mfrow=c(1,3))
+plot.all.covs(nm)
+```
+
+### Predictive plots and uncertainty plots
+
+Comparing predictive abundance maps over the OSAMP area and corresponding uncertainty maps, we see similar resuts between models.
+
+```{r, cache=TRUE, echo=FALSE, message=FALSE}
+library(gridExtra)
+plot.preds <- function(pred.data){
+  p <- ggplot(pred.data)
+  p <- p + p.opts.geo
+  p <- p + geom_polygon(aes(x=x,y=y,group=group),
+                        colour="black",fill=NA,data=coast)
+  p <- p + coord_equal(xlim = xlims, ylim = ylims)
+  p <- p + geom_tile(aes_string(x="x",y="y",fill="N",
+                         height="height", width="width"))
+  p <- p + scale_fill_gradient(low="white",high="black")
+  p <- p + theme(axis.text.x=element_text(size=12))+
+           theme(axis.text.y=element_text(size=12))+
+           theme(axis.title.x=element_text(size=12))+
+           theme(axis.title.y=element_text(size=12))+
+           theme(title=element_text(size=14))+
+           theme(aspect.ratio=1)
+  return(p)
+}
+
+ggs <- list()
+i <- 1
+
+p.ci <- c()
+
+for(mod in nm){
+  tt <- mod
+  mod <- get(mod)
+
+  # predictive plot
+  loon.model.predict <- predict(mod, pred, pred$cellaream)
+  loon.model.predict <- cbind(pred, N=loon.model.predict)
+
+  ggs[[i]] <- plot.preds(loon.model.predict) +
+                ggtitle(paste0(tt," - predicted abundance"))
+  i <- i+1
+
+  #uncertainty
+  if(as.character(mod$formula[[2]])=="Nhat"){
+    mod.var <- dsm.var.gam(mod, split(pred,1:nrow(pred)), pred$cellarea)
+  }else{
+    mod.var <- dsm.var.prop(mod, split(pred,1:nrow(pred)), pred$cellarea)
+  }
+  gg.obj <- plot(mod.var,poly=coast,plot=FALSE,observations=FALSE,
+                 gg.grad=scale_fill_gradient(low="white",high="black",
+                                 trans="log",breaks=c(0.3,1,2.7)))
+  gg.obj <- gg.obj + coord_equal(xlim = xlims,ylim = ylims)
+  gg.obj <- gg.obj + theme(axis.text.x=element_text(size=12))+
+                     theme(axis.text.y=element_text(size=12))+
+                     theme(axis.title.x=element_text(size=12))+
+                     theme(axis.title.y=element_text(size=12))+
+                     theme(title=element_text(size=14))+
+                     theme(aspect.ratio=1)
+  gg.obj <- gg.obj+ggtitle(paste0(tt," - uncertainty"))
+
+  #print(gg.obj)
+  ggs[[i]] <- gg.obj
+  i <- i + 1
+
+  # save prediction and ci
+  var.sum <- summary(mod.var)
+  asymp.ci.c.term <- exp(1.96*sqrt(log(1+var.sum$cv^2)))
+  asymp.tot <- c(var.sum$pred.est / asymp.ci.c.term,
+                 var.sum$pred.est,
+                 var.sum$pred.est * asymp.ci.c.term)
+  p.ci <- rbind(p.ci,asymp.tot)
+}
+```
+
+```{r, fig.cap="Predicted abundance and uncertainty plots for all models.", cache=TRUE, echo=FALSE, fig.width=12,fig.height=18}
+grid.arrange(ggs[[1]],ggs[[2]],ggs[[3]],ggs[[4]],ggs[[5]],ggs[[6]],
+            ggs[[7]],ggs[[8]],ncol=2)
+```
+
+
+### Comparison of point estimates and confidence intervals
+
+In addition to the plots above, we can also look at the abundance point estimates (i.e. the sums of the predicted abundance maps, above), along with their confidence intervals...
+
+```{r fig.cap="",cache=TRUE}
+y.vals <- 1:4
+plot(p.ci[,2],y.vals,pch=19,axes=FALSE,xlim=range(p.ci)-c(600,0),ylab="",xlab="Abundance")
+axis(1)
+axis(2,at=y.vals,labels=nm,las=2,lwd=0,hadj=0)
+segments(x0=p.ci[,1],x1=p.ci[,3],y0=y.vals)
+```
+
+Drawing some conclusions from the above plots and tables, we see that the best model in predictive power terms (adjusted-$R^2$ and percentage deviance explained) is the hazard-rate model with 
+
+
+### Final model selection
+
+Given the relatively small differences observed between the models, there is not a huge body of evidence swaying the investigator to one over the other. However, we choose the hazard-rate detection function with no covariates for the following reasons:
+
+ * The DSM has a higher adjusted-$R^2$ and percentage deviance explained than the other models. The abundance predicted from the model had the lowest coefficient of variation.
+ * The hazard-rate detection function requires less parameters and differs by less than two AIC points from the more complex models.
+ * Using a model without covariates allows us to use the variance propagation method of Williams et al. (2011), giving us a more reliable estimate of the variance in the predicted abundance.
+ * Predicted abundances, maps of coefficients of variation, smooth curves and average detection probabilities were very similar between models.
+
+
+## Sensitivity analysis
+
+#### Sensitivity -- DSM without `gchl_long`
+
+To check that the other measures of chlorophyll *a* were not simply removed due to high correlation with `gchl_long`, we refit the model without `gchl_long`. After covariate selection we have:
+
+```{r cache=TRUE}
+loon.model.nogchl_long <- dsm(N~#s(gchl_winter,k=k1)+
+                                #s(fcpi,k=k1)+
+                                #s(roughness,k=k1)+
+                                #s(phimedian,k=k1)+
+                                s(distancelandkm,k=k1)+
+                                #s(depthm,k=k1)+
+                                depthm+
+                                #s(x,k=k1)+
+                                s(y,k=k1)+
+                                s(x,y,k=k2),
+                              hr.df, seg, obs.loons,
+                              family=negbin(theta=c(0.1,0.4)), availability=0.7,
+                              select=TRUE, method="REML")
+```
+
+```{r}
+summary(loon.model.nogchl_long)
+```
+
+```{r dsm-check-nogchl, fig.cap="Model checking plot for sensitivity analysis model without long term chlorophyll *a* (no `gchl_long`)."}
+gam.check(loon.model.nogchl_long)
+```
+
+```{r cache=TRUE}
+summary(dsm.var.prop(loon.model.nogchl_long,pred,pred$cellaream))
+```
+
+The terms selected here are all clearly highly concurve: we can write all of the smooth terms as smooth functions of each other. This may well explain why the corresponding predicted abundance is so far from the above model and that given in other literature.
+
+#### Sensitivity -- DSM without `gchl_long` or bivariate `x` and `y` smooth
+
+The above model includes both a univariate smooth of `y` and a bivariate smooth of `x` and `y`, which seems rather redundant. Removing the bivariate term from the outset yields:
+
+```{r cache=TRUE}
+loon.model.nogchl_longxy <- dsm(N~#s(gchl_winter,k=k1)+
+                                  #s(fcpi,k=k1)+
+                                  s(roughness,k=k1)+
+                                  #s(phimedian,k=k1)+
+                                  #s(distancelandkm,k=k1)+
+                                  #s(depthm,k=k1)+
+                                  depthm+
+                                  s(x,k=k1)+
+                                  s(y,k=k1),
+                              hr.df, seg, obs.loons,
+                              family=negbin(theta=c(0.1,0.4)), availability=0.7,
+                              select=TRUE, method="REML")
+```
+
+```{r}
+summary(loon.model.nogchl_longxy)
+```
+
+```{r dsm-check-nogchlxy, fig.cap="Model checking plot for sensitivity analysis model without long term chlorophyll *a* or bivariate smooth of location."}
+gam.check(loon.model.nogchl_longxy)
+```
+
+This seems to give an abundance estimate more in line with the model that included `gchl_long`.
+
+```{r cache=TRUE}
+summary(dsm.var.prop(loon.model.nogchl_longxy,pred,pred$cellaream))
+```
+
+Neither of the above models includes the other measures of chlorohyll *a*, so it is safe to conclude that there are not issues with confounding between `gchl_long` and `gchl_winter`/`fcpi`.
+
+
+
+
+### Checking the response distribution
+
+We can also try other response distributions to check that the negative binomial is appropriate. Again going through the same steps of covariate selection to ensure the model is "optimal" (in some sense).
+
+#### Quasi-Poisson
+
+```{r cache=TRUE}
+loon.model.qp <- dsm(N~s(gchl_long,k=k1)+
+                       #s(gchl_winter,k=k1)+
+                       #s(fcpi,k=k1)+
+                       s(roughness,k=k1)+
+                       #s(phimedian,k=k1)+
+                       s(distancelandkm,k=k1)+
+                       #s(depthm,k=k1)+
+                       depthm+
+                       s(x,k=k1)+
+                       s(y,k=k1),#+
+                       #s(x,y,k=k2),
+                  hr.df, seg, obs.loons,
+                  family=quasipoisson(), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r}
+summary(loon.model.qp)
+```
+
+The Q-Q plot for this model is not nice!
+
+```{r dsm-check-qp, fig.cap="Model checking plot for model using quasi-Poisson response distribution"}
+gam.check(loon.model.qp)
+```
+
+The quasi-Poisson model also gives an extremely large abundance estimate and confidence interval, it seems safe to discard this model.
+
+```{r cache=TRUE}
+summary(dsm.var.prop(loon.model.qp,pred,pred$cellaream))
+```
+
+
+#### Tweedie
+
+
+```{r cache=TRUE}
+loon.model.tw <- dsm(N~s(gchl_long,k=k1)+
+                       #s(gchl_winter,k=k1)+
+                       #s(fcpi,k=k1)+
+                       s(roughness,k=k1)+
+                       #s(phimedian,k=k1)+
+                       s(distancelandkm,k=k1)+
+                       #s(depthm,k=k1)+
+                       depthm+
+                       s(x,k=k1)+
+                       s(y,k=k1),#+
+                       #s(x,y,k=k2),
+                  hr.df, seg, obs.loons,
+                  family=Tweedie(p=1.1), availability=0.7,
+                  select=TRUE, method="REML")
+```
+
+```{r}
+summary(loon.model.tw)
+```
+
+To find the `p` parameter for the Tweedie distribution we need to manually search over values of `p`, which range from 1.1 to 1.9 and are relatively invariant to changes beyond the first decimal place... We can use AIC to decide on a best value.
+
+```{r cache=TRUE}
+for(p in seq(1.1,1.9,by=0.1)){
+  loon.model.tw.test <- dsm(N~s(gchl_long,k=k1)+
+                         s(roughness,k=k1)+
+                         s(distancelandkm,k=k1)+
+                         depthm+
+                         s(x,k=k1)+
+                         s(y,k=k1),
+                    hr.df, seg, obs.loons,
+                    family=Tweedie(p=p), availability=0.7,
+                    select=TRUE, method="REML")
+  cat("p=",p,"AIC=",AIC(loon.model.tw.test),"\n")
+}
+```
+
+The smallest AIC is given by a value of `p=1.1`, as used above.
+
+Again, the Q-Q plot for this model is not as good as the Q-Q plot for the negative binomial model above, showing significant divergance from the theoretical residuals.
+
+```{r dsm-check-tw, fig.cap="Model checking plot for model with Tweedie response distribution."}
+gam.check(loon.model.tw)
+```
+
+Predicted abundance is also rather large in comparison to the negative binomial model.
+
+```{r cache=TRUE}
+summary(dsm.var.prop(loon.model.tw,pred,pred$cellaream))
+```
+
+### Sensitivity to availability correction
+
+Looking at the negative binomial model, again we can test the sensitivity of the model to values of the availability correction factor.
+
+
+```{r cache=TRUE}
+avail.range <- seq(0.5,1,by=0.05)
+
+N.ci.res <- c()
+
+for(this.avail in avail.range){
+  this.loon.model <- dsm(N~s(gchl_long,k=k1)+
+                           s(depthm,k=k1)+
+                           s(y,k=k1),#+
+                        hr.df, seg, obs.loons,
+                        family=negbin(theta=c(0.1,0.4)),availability=this.avail,
+                        select=TRUE, method="REML")
+  var.est <- summary(dsm.var.prop(this.loon.model,pred,pred$cellaream))
+
+  cv2 <- var.est$cv^2
+
+  asymp.ci.c.term <- exp(1.96*sqrt(log(1+cv2)))
+  asymp.tot <- c(sum(var.est$pred.est) / asymp.ci.c.term,
+               sum(var.est$pred.est),
+               sum(var.est$pred.est) * asymp.ci.c.term)
+  names(asymp.tot) <- c("5%","Mean","95%")
+  N.ci.res<-rbind(N.ci.res,asymp.tot)
+}
+```
+
+The plot below shows that there is a clear relationship between abundance and the availability bias correction factor. This can be seen from examining the model equation for the spatial model, where the correction factor effects only the offset of the model.
+
+```{r, fig.cap="Plot of predicted abundances and corresponding confidence intervals when the availability bias is varied between 0.5 and 1."}
+plot(avail.range,N.ci.res[,2],pch=19,type="n",
+     xlim=c(0.45,1),ylim=c(min(N.ci.res),max(N.ci.res)),
+     xlab="Availability bias correction",ylab="Abundance")
+segments(x0=avail.range,x1=avail.range,
+         y0=N.ci.res[,1],y1=N.ci.res[,3])
+
+polygon(x=c(0.3,1.1,1.1,0.3,0.3),
+        y=N.ci.res[5,c(3,3,1,1,3)],
+        col=rgb(166/255, 189/255,219/255,0.2),border=NA)
+
+points(avail.range,N.ci.res[,2],pch=19)
+```
+
+
+## Conclusion
+
+Model selection and sensitivity testing shows that including the long term average of chlorophyll *a* (`gchl_long`), using the negative binomial distribution as response gives robust estimates of the abundance and distribution of common loons in the Rhode Island OSAMP region.
+
+
+## Save results
+
+```{r}
+save.image("MEPS-loons-models.RData")
+```
+
+# References
+
+Miller DL (2012) Distance: A simple way to fit detection functions to distance sampling data and calculate abundance/density for biological populations. R package version 0.7.1. http://CRAN.R-project.org/package=Distance
+
+Miller DL (2013) dsm: Density surface modelling of distance sampling data. R package version 2.0.1. http://CRAN.R-project.org/package=dsm
+
+Williams R, Hedley SL, Branch TA, Bravington MV, Zerbini AN, Findlay KP (2011) Chilean blue whales as a case study to illustrate methods to estimate abundance and evaluate conservation status of rare species. Con Bio 25:526–535
+
+Wood SN (2006) Generalized Additive Models: An Introduction with R. Chapman and Hall/CRC Press.
+
+Wood SN (2011) Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models. J Royal Stat Soc Series B 73:3-36
+
+Xie Y (2013) knitr: A general-purpose package for dynamic report generation in R. R package version 1.0. http://CRAN.R-project.org/package=knitr
