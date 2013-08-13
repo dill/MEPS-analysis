@@ -1,10 +1,13 @@
 `r opts_chunk$set(fig.path='MEPS-analysis-figs/', cache.path='MEPS-cache/')`
-# Supplemental material for: Environmental factors determining the distribution and abundance of a diving marine bird: conservation implications for the common loon *Gavia immer*
+
+# Supplemental material for: A spatially-explicit model of wintering common loons: conservation implications
+
+
 # Analysis of common loon data
 
-This document is a record of modelling for the common loon data from the URI survey of the OSAMP area off the coast of Rhode Island. It includes minimal interpretation of results, which can be found in the accompanying paper.
+This document is a record of modelling for the common loon data from the URI survey of the OSAMP area off the coast of Rhode Island. It includes minimal interpretation of results, which can be found in the accompanying paper:  *spatially-explicit model of wintering common loons: conservation implications* by Winiarski, Miller, Paton and McWilliams, published in Marine Ecology Progress Series.
 
-This document has been created using \texttt{knitr} (Yihui 2013). The file \texttt{MEPS-analysis.Rmd} includes all the code necessary to run the models described.
+This document has been created using \texttt{knitr} (Xei 2013). The file \texttt{MEPS-analysis.Rmd} includes all the code necessary to run the models described.
 
 ## Preamble
 
